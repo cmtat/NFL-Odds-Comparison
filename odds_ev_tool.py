@@ -9,6 +9,10 @@ uploaded odds.
 Usage:
     python odds_ev_tool.py /path/to/lines.json --event EVENT_ID --api-key KEY
 
+The input file may be either JSON or an HTML page saved from your book. When
+using HTML, save the page as "Webpage, HTML Only" so the raw HTML can be parsed
+directly.
+
 The API key can also be supplied via the THE_ODDS_API_KEY environment variable.
 """
 
@@ -64,14 +68,18 @@ def parse_book_file(path: str) -> List[Tuple[str, float]]:
     HTML format example (attributes on any element)::
         <div data-team="Team A" data-odds="-105"></div>
         <div data-team="Team B" data-odds="115"></div>
+
+    The HTML approach works well when exporting a page with "Webpage, HTML Only"
+    so these attributes are preserved in the file.
     """
 
-    if path.endswith(".json"):
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".json":
         with open(path) as f:
             data = json.load(f)
         return [(line["team"], float(line["odds"])) for line in data["lines"]]
 
-    if path.endswith(".html"):
+    if ext in {".html", ".htm"}:
         with open(path) as f:
             soup = BeautifulSoup(f, "html.parser")
         lines: List[Tuple[str, float]] = []
