@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Odds EV Analyzer{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1><a href="{{ url_for('index') }}">Odds EV Analyzer</a></h1>
+      <p class="tagline">Compare your sportsbook against sharp books using The Odds API.</p>
+    </header>
+    <main>
+      {% with messages = get_flashed_messages(with_categories=True) %}
+        {% if messages %}
+          <div class="flash-messages">
+            {% for category, message in messages %}
+              <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="app-footer">
+      <p>
+        Built with <a href="https://the-odds-api.com/">The Odds API</a> data. Positive EV does not guarantee a win—manage risk responsibly.
+      </p>
+    </footer>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

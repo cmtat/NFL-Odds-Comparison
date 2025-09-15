@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+
+{% block title %}Odds EV Analyzer{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h2>Analyze your sportsbook lines</h2>
+  <p>
+    Enter your The Odds API key, choose an event, and upload odds from your sportsbook. You can upload a saved HTML/JSON export or a screenshot (requires Tesseract OCR on the server). Adjust any parsed lines before running the analysis.
+  </p>
+  <form method="post" enctype="multipart/form-data" class="analysis-form">
+    <fieldset>
+      <legend>API and market</legend>
+      <div class="field">
+        <label for="api_key">The Odds API key</label>
+        <input id="api_key" name="api_key" type="text" value="{{ api_key }}" autocomplete="off" required />
+      </div>
+      <div class="field grouped">
+        <div>
+          <label for="sport">Sport</label>
+          <select id="sport" name="sport">
+            {% for item in sports %}
+              <option value="{{ item.key }}" {% if item.key == sport %}selected{% endif %}>{{ item.title or item.key }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="event_id">Event</label>
+          <select id="event_id" name="event_id">
+            <option value="">Select an event</option>
+            {% for event in events %}
+              <option value="{{ event.id }}" {% if event.id == event_id %}selected{% endif %}>
+                {{ event.name or event.id }}
+              </option>
+            {% endfor %}
+          </select>
+          <button type="button" id="refresh-events" class="secondary">Refresh events</button>
+          <small id="event-status" class="help"></small>
+        </div>
+        <div>
+          <label for="market">Market</label>
+          <select id="market" name="market">
+            <option value="h2h" {% if market == 'h2h' %}selected{% endif %}>Moneyline (H2H)</option>
+            <option value="spreads" {% if market == 'spreads' %}selected{% endif %}>Point spreads</option>
+            <option value="totals" {% if market == 'totals' %}selected{% endif %}>Totals (Over/Under)</option>
+          </select>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Bankroll settings</legend>
+      <div class="field grouped">
+        <div>
+          <label for="stake">Stake for EV calculation ($)</label>
+          <input id="stake" name="stake" type="number" min="1" step="1" value="{{ '%.2f'|format(stake) }}" />
+        </div>
+        <div>
+          <label for="bankroll">Total bankroll ($)</label>
+          <input id="bankroll" name="bankroll" type="number" min="1" step="1" value="{{ '%.2f'|format(bankroll) }}" />
+        </div>
+        <div>
+          <label for="fractional_kelly">Fractional Kelly (0–1)</label>
+          <input id="fractional_kelly" name="fractional_kelly" type="number" min="0" max="1" step="0.1" value="{{ '%.2f'|format(fractional_kelly) }}" />
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Your sportsbook lines</legend>
+      <div class="field">
+        <label for="lines_file">Upload file or screenshot</label>
+        <input id="lines_file" name="lines_file" type="file" accept=".json,.html,.htm,image/*" />
+        <small class="help">Screenshots require Pillow + Tesseract OCR on the server. If parsing looks off, adjust the lines below.</small>
+      </div>
+      <div class="line-inputs" id="line-inputs">
+        {% for line in line_inputs %}
+          <div class="line-row">
+            <label>Label
+              <input type="text" name="line_name[]" value="{{ line.label }}" placeholder="Team / Over" />
+            </label>
+            <label>Odds
+              <input type="text" name="line_odds[]" value="{{ line.odds }}" placeholder="-110" />
+            </label>
+            <label>Point
+              <input type="number" step="0.5" name="line_point[]" value="{{ line.point }}" placeholder="Optional" />
+            </label>
+            <button type="button" class="remove-line" aria-label="Remove line">&times;</button>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="line-actions">
+        <button type="button" id="add-line" class="secondary">Add another line</button>
+      </div>
+    </fieldset>
+
+    <div class="form-actions">
+      <button type="submit" class="primary">Analyze expected value</button>
+    </div>
+  </form>
+</section>
+
+{% if recognized_text %}
+  <section class="panel">
+    <h2>OCR preview</h2>
+    <p>The following text was extracted from your screenshot. Adjust the lines above if necessary.</p>
+    <pre class="ocr-text">{{ recognized_text }}</pre>
+  </section>
+{% endif %}
+
+{% if analysis_results %}
+  {% set summary = namespace(positive=0) %}
+  {% for result in analysis_results %}
+    {% if result.status == 'matched' and result.expected_value > 0 %}
+      {% set summary.positive = summary.positive + 1 %}
+    {% endif %}
+  {% endfor %}
+  <section class="panel">
+    <h2>Expected value results</h2>
+    {% if event_info %}
+      <div class="event-summary">
+        <h3>{{ event_info.name }}</h3>
+        {% if event_info.commence_time %}
+          <p>Commences: {{ event_info.commence_time }}</p>
+        {% endif %}
+        {% if consensus and consensus.consensus_point is not none %}
+          <p>Consensus point: {{ consensus.consensus_point }}</p>
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if summary.positive > 0 %}
+      <p class="highlight">{{ summary.positive }} selection{{ 's' if summary.positive != 1 else '' }} show positive expected value based on sharp consensus.</p>
+    {% else %}
+      <p>No positive EV opportunities detected for the provided lines.</p>
+    {% endif %}
+    <table class="results-table">
+      <thead>
+        <tr>
+          <th>Your selection</th>
+          <th>Your odds</th>
+          <th>Consensus avg</th>
+          <th>True probability</th>
+          <th>Fair odds</th>
+          <th>Expected value (stake)</th>
+          <th>Kelly fraction</th>
+          <th>Recommended bet</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for result in analysis_results %}
+          {% if result.status == 'matched' %}
+            <tr class="matched {% if result.expected_value > 0 %}positive{% endif %}">
+              <td>
+                <strong>{{ result.label }}</strong>
+                <div class="sub">Matched to {{ result.matched_outcome }} ({{ result.match_reason }})</div>
+                {% if result.user_point is not none %}
+                  <div class="sub">Your line: {{ result.user_point }}</div>
+                {% endif %}
+                {% if result.consensus_point is not none %}
+                  <div class="sub">Consensus line: {{ result.consensus_point }}</div>
+                {% endif %}
+              </td>
+              <td>{{ result.odds }}</td>
+              <td>{{ result.consensus_price if result.consensus_price is not none else '—' }}</td>
+              <td>
+                {% if result.true_prob is not none %}
+                  {{ (result.true_prob * 100) | round(2) }}%
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>{% if result.fair_price is not none %}{{ result.fair_price }}{% else %}—{% endif %}</td>
+              <td class="numeric">{{ result.expected_value | round(2) }}</td>
+              <td class="numeric">{{ (result.kelly_fraction * 100) | round(2) }}%</td>
+              <td class="numeric">${{ result.recommended_bet | round(2) }}</td>
+              <td>{% if result.expected_value > 0 %}Positive EV{% else %}Neutral/negative{% endif %}</td>
+            </tr>
+          {% else %}
+            <tr class="unmatched">
+              <td colspan="9">Could not match <strong>{{ result.label }}</strong>: {{ result.message }}</td>
+            </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endif %}
+
+{% if consensus and bookmaker_rows %}
+  <section class="panel">
+    <h2>Sportsbook comparison</h2>
+    <table class="bookmaker-table">
+      <thead>
+        <tr>
+          <th>Sportsbook</th>
+          {% for outcome in consensus.outcomes %}
+            <th>
+              {{ outcome.name }}
+              {% if outcome.point is not none %}
+                <div class="sub">Point: {{ outcome.point }}</div>
+              {% endif %}
+            </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in bookmaker_rows %}
+          <tr class="{% if row.is_sharp %}sharp{% endif %}">
+            <td>
+              {{ row.title }}
+              {% if row.is_sharp %}<span class="badge">Sharp</span>{% endif %}
+              {% if row.last_update %}
+                <div class="sub">Updated {{ row.last_update }}</div>
+              {% endif %}
+            </td>
+            {% for outcome in row.outcomes %}
+              <td>
+                {% if outcome.price is not none %}
+                  {{ outcome.price }}
+                  {% if outcome.point is not none %}
+                    <div class="sub">Point: {{ outcome.point }}</div>
+                  {% endif %}
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<template id="line-template">
+  <div class="line-row">
+    <label>Label
+      <input type="text" name="line_name[]" placeholder="Team / Over" />
+    </label>
+    <label>Odds
+      <input type="text" name="line_odds[]" placeholder="-110" />
+    </label>
+    <label>Point
+      <input type="number" step="0.5" name="line_point[]" placeholder="Optional" />
+    </label>
+    <button type="button" class="remove-line" aria-label="Remove line">&times;</button>
+  </div>
+</template>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const sportSelect = document.getElementById('sport');
+    const apiKeyInput = document.getElementById('api_key');
+    const eventSelect = document.getElementById('event_id');
+    const refreshButton = document.getElementById('refresh-events');
+    const statusEl = document.getElementById('event-status');
+    const selectedEventId = {{ event_id|tojson }};
+
+    async function loadEvents() {
+      const apiKey = apiKeyInput.value.trim();
+      const sport = sportSelect.value;
+      if (!apiKey || !sport) {
+        statusEl.textContent = 'Enter API key and select a sport to load events.';
+        return;
+      }
+      statusEl.textContent = 'Loading events…';
+      eventSelect.disabled = true;
+      try {
+        const response = await fetch('{{ url_for('list_events') }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: apiKey, sport })
+        });
+        const data = await response.json();
+        eventSelect.innerHTML = '';
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = 'Select an event';
+        eventSelect.appendChild(defaultOption);
+        if (data.events) {
+          data.events.forEach((event) => {
+            const option = document.createElement('option');
+            option.value = event.id;
+            option.textContent = event.name || event.id;
+            if (selectedEventId && event.id === selectedEventId) {
+              option.selected = true;
+            }
+            eventSelect.appendChild(option);
+          });
+          statusEl.textContent = data.events.length ? `Loaded ${data.events.length} events.` : 'No events returned for this sport.';
+        } else {
+          statusEl.textContent = data.error || 'Unable to load events.';
+        }
+      } catch (error) {
+        console.error(error);
+        statusEl.textContent = 'Failed to load events.';
+      } finally {
+        eventSelect.disabled = false;
+      }
+    }
+
+    if (refreshButton) {
+      refreshButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        loadEvents();
+      });
+    }
+    if (sportSelect) {
+      sportSelect.addEventListener('change', loadEvents);
+    }
+
+    const linesContainer = document.getElementById('line-inputs');
+    const addLineButton = document.getElementById('add-line');
+    const template = document.getElementById('line-template');
+
+    function addLine() {
+      if (!template) return;
+      const fragment = template.content.firstElementChild.cloneNode(true);
+      linesContainer.appendChild(fragment);
+    }
+
+    if (addLineButton) {
+      addLineButton.addEventListener('click', () => addLine());
+    }
+
+    linesContainer.addEventListener('click', (event) => {
+      const target = event.target;
+      if (target && target.classList.contains('remove-line')) {
+        const row = target.closest('.line-row');
+        if (row && linesContainer.children.length > 1) {
+          row.remove();
+        }
+      }
+    });
+  });
+</script>
+{% endblock %}
